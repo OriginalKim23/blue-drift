@@ -1,28 +1,26 @@
-# v0.9.2 Cherenkov Bioluminescence jellyfish
+# Blue Drift 3D
 
-GitHub Pages에 바로 올리는 정적 버전입니다.
+GitHub Pages 업로드용 정적 파일입니다.
 
-## 이번 수정
-- 첫 화면 문구 교체
-- 버튼 클릭 후 2~3초 안에 검은 화면에서 해파리가 서서히 드러나는 연출 추가
-- 갓 터치 반응을 생물체의 젤리 같은 펌핑으로 조정
-- 빛 반응을 순간 반짝임보다 부드러운 차오름/사라짐으로 조정
-- 갓 터치 시 번진 푸른 링 잔광 추가
-- 촉수 문지름 시 터치한 주변 가닥마다 작은 빛 조각이 생기도록 추가
-- 촉수 소리는 몽환적인 기계/글라스 신호음 유지
+## 업로드 방법
 
-## GitHub에 올릴 파일
-아래 5개를 저장소 최상단에 덮어 올리면 됩니다.
+이 폴더 안의 파일들을 GitHub 저장소 루트에 그대로 올리세요.
 
+필수 파일:
 - index.html
-- main.js
 - style.css
+- main.js
 - music.mp3
+- .nojekyll
 - README.md
 
-## Pages 설정
-Settings → Pages
+## GitHub Pages 설정
 
-- Source: Deploy from a branch
-- Branch: main
-- Folder: /root
+1. GitHub 저장소로 이동
+2. Settings → Pages
+3. Source를 `Deploy from a branch`로 선택
+4. Branch를 `main`, 폴더를 `/root`로 선택
+5. Save
+6. 배포 주소가 뜰 때까지 1~3분 정도 기다리기
+
+주의: zip 파일 자체를 올리는 것이 아니라, 압축을 풀고 안의 파일들을 올려야 합니다.
