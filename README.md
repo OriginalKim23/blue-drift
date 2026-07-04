@@ -1,6 +1,6 @@
-# Blue Drift 3D
+# Blue Drift 3D 5174 Version
 
-GitHub Pages 업로드용 정적 파일입니다.
+localhost:5174 때의 촉수 반응 느낌을 기준으로 정리한 GitHub Pages 업로드용 정적 파일입니다.
 
 ## 업로드 방법
 
