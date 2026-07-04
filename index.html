@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Blue Drift Static Mobile Touch</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="start">
+      <div class="panel">
+        <h1>Blue Drift 3D</h1>
+        <p>v0.8 · 느린 등장 복구 + 부유물 자연화. 해파리는 어둠 속에서 천천히 드러나고, 하얀 점은 덜 인위적으로 조정.</p>
+        <button id="startButton">잠수하기</button>
+      </div>
+    </div>
+
+    <div id="hud">
+      <div class="title">Blue Drift · Mobile Touch v0.9</div>
+      <div class="desc">드래그: 시야 회전 · 핀치/휠: 접근/후퇴 · 갓 터치: 빛 반응 · 촉수 문지르기: 작은 하프톤</div>
+    </div>
+
+
+    <button id="settingsButton" aria-label="settings">⚙</button>
+    <div id="settingsPanel" class="hidden">
+      <div class="settingsHeader">
+        <strong>설정</strong>
+        <button id="closeSettings" aria-label="close">×</button>
+      </div>
+
+      <label class="row">
+        <span>수중음</span>
+        <input id="underwaterVolume" type="range" min="0" max="1" step="0.01" value="0.38" />
+      </label>
+
+      <label class="row toggle">
+        <span>음악</span>
+        <input id="musicToggle" type="checkbox" />
+      </label>
+
+      <label class="row">
+        <span>음악 볼륨</span>
+        <input id="musicVolume" type="range" min="0" max="1" step="0.01" value="0.28" />
+      </label>
+
+      <label class="row">
+        <span>터치음</span>
+        <input id="touchVolume" type="range" min="0" max="1" step="0.01" value="0.38" />
+      </label>
+
+      <div class="hint">
+        갓을 톡 치면 빛이 번지고, 촉수 쪽을 문지르면 작은 하프톤이 납니다.
+      </div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
