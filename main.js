@@ -15,6 +15,8 @@ let audioCtx = null;
 let underwaterMaster = null;
 let touchMaster = null;
 let musicAudio = null;
+let musicMaster = null;
+let musicSourceNode = null;
 let audioStarted = false;
 
 let underwaterVolume = 0.38;
@@ -22,6 +24,8 @@ let musicVolume = 0.28;
 let touchVolume = 0.38;
 
 let bellTouchPulse = 0;
+let bellTouchTarget = 0;
+let bellGlowFlash = 0;
 let tentacleRubPulse = 0;
 let lastHarpTime = 0;
 let lastTapTime = 0;
@@ -478,7 +482,8 @@ function raycastAt(clientX, clientY, objects) {
 function handleTap(clientX, clientY) {
   const bellHits = raycastAt(clientX, clientY, [bell, innerBell, capGlow, core, rim1, rim2]);
   if (bellHits.length > 0) {
-    bellTouchPulse = 1.0;
+    bellTouchTarget = Math.max(bellTouchTarget, 1.12);
+    bellGlowFlash = 1.0;
     playBloomTone();
     return;
   }
@@ -593,7 +598,11 @@ function updateAudioVolumes() {
     touchMaster.gain.setTargetAtTime(touchVolume, audioCtx.currentTime, 0.04);
   }
   if (musicAudio) {
-    musicAudio.volume = musicToggle.checked ? musicVolume : 0;
+    musicAudio.volume = 1.0;
+  }
+  if (musicMaster && audioCtx) {
+    const targetMusicVolume = musicToggle.checked ? musicVolume : 0;
+    musicMaster.gain.setTargetAtTime(targetMusicVolume, audioCtx.currentTime, 0.05);
   }
 }
 
@@ -611,6 +620,10 @@ function setupAudio() {
     touchMaster = audioCtx.createGain();
     touchMaster.gain.value = touchVolume;
     touchMaster.connect(audioCtx.destination);
+
+    musicMaster = audioCtx.createGain();
+    musicMaster.gain.value = musicToggle.checked ? musicVolume : 0;
+    musicMaster.connect(audioCtx.destination);
 
     const bus = audioCtx.createGain();
     bus.connect(underwaterMaster);
@@ -672,7 +685,13 @@ function setupAudio() {
 
     musicAudio = new Audio('./music.mp3');
     musicAudio.loop = true;
-    musicAudio.volume = musicToggle.checked ? musicVolume : 0;
+    musicAudio.volume = 1.0;
+    musicAudio.preload = 'auto';
+    if (musicMaster) {
+      musicSourceNode = audioCtx.createMediaElementSource(musicAudio);
+      musicSourceNode.connect(musicMaster);
+    }
+    updateAudioVolumes();
     if (musicToggle.checked) {
       musicAudio.play().catch(() => {});
     }
@@ -686,56 +705,87 @@ function playBloomTone() {
 
   const now = audioCtx.currentTime;
   const osc = audioCtx.createOscillator();
+  const overtone = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
+  const overtoneGain = audioCtx.createGain();
   const filter = audioCtx.createBiquadFilter();
 
   osc.type = 'sine';
-  osc.frequency.setValueAtTime(130, now);
-  osc.frequency.exponentialRampToValueAtTime(68, now + 1.15);
+  osc.frequency.setValueAtTime(92, now);
+  osc.frequency.exponentialRampToValueAtTime(54, now + 1.85);
+
+  overtone.type = 'sine';
+  overtone.frequency.setValueAtTime(184, now);
+  overtone.frequency.exponentialRampToValueAtTime(108, now + 1.85);
+  overtoneGain.gain.value = 0.20;
 
   filter.type = 'lowpass';
-  filter.frequency.value = 420;
-  filter.Q.value = 0.6;
+  filter.frequency.value = 360;
+  filter.Q.value = 0.55;
 
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.075, now + 0.08);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+  gain.gain.exponentialRampToValueAtTime(0.070, now + 0.18);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.95);
 
-  osc.connect(filter).connect(gain).connect(touchMaster);
+  osc.connect(filter);
+  overtone.connect(overtoneGain).connect(filter);
+  filter.connect(gain).connect(touchMaster);
+
   osc.start(now);
-  osc.stop(now + 1.25);
+  overtone.start(now);
+  osc.stop(now + 2.0);
+  overtone.stop(now + 2.0);
 }
 
 function playHarpTone(hitY = 0) {
   if (!audioCtx || !touchMaster) return;
 
   const now = audioCtx.currentTime;
-  const scale = [392, 466.16, 523.25, 587.33, 698.46, 783.99, 932.33];
-  const idx = Math.abs(Math.floor((hitY + 7) * 1.7 + Math.random() * 2)) % scale.length;
+  const scale = [220, 261.63, 293.66, 329.63, 392.0, 440.0, 523.25];
+  const idx = Math.abs(Math.floor((hitY + 7) * 1.35 + Math.random() * 2)) % scale.length;
   const freq = scale[idx];
 
-  const osc = audioCtx.createOscillator();
+  const carrier = audioCtx.createOscillator();
+  const shimmer = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
+  const shimmerGain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
   const delay = audioCtx.createDelay();
+  const feedback = audioCtx.createGain();
   const wet = audioCtx.createGain();
 
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(freq, now);
-  osc.frequency.exponentialRampToValueAtTime(freq * 0.997, now + 0.8);
+  carrier.type = 'sine';
+  carrier.frequency.setValueAtTime(freq, now);
+  carrier.frequency.exponentialRampToValueAtTime(freq * 0.992, now + 1.55);
+
+  shimmer.type = 'triangle';
+  shimmer.frequency.setValueAtTime(freq * 2.01, now);
+  shimmer.frequency.exponentialRampToValueAtTime(freq * 1.985, now + 1.55);
+  shimmerGain.gain.value = 0.12;
+
+  filter.type = 'bandpass';
+  filter.frequency.value = freq * 1.45;
+  filter.Q.value = 1.15;
 
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.040, now + 0.025);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.05);
+  gain.gain.exponentialRampToValueAtTime(0.026, now + 0.055);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.65);
 
-  delay.delayTime.value = 0.18;
-  wet.gain.value = 0.22;
+  delay.delayTime.value = 0.235;
+  feedback.gain.value = 0.22;
+  wet.gain.value = 0.28;
 
-  osc.connect(gain);
+  carrier.connect(filter);
+  shimmer.connect(shimmerGain).connect(filter);
+  filter.connect(gain);
   gain.connect(touchMaster);
-  gain.connect(delay).connect(wet).connect(touchMaster);
+  gain.connect(delay).connect(feedback).connect(delay);
+  delay.connect(wet).connect(touchMaster);
 
-  osc.start(now);
-  osc.stop(now + 1.1);
+  carrier.start(now);
+  shimmer.start(now);
+  carrier.stop(now + 1.75);
+  shimmer.stop(now + 1.75);
 }
 
 settingsButton.addEventListener('click', () => {
@@ -765,6 +815,12 @@ musicToggle.addEventListener('change', () => {
   if (!musicAudio && audioStarted) {
     musicAudio = new Audio('./music.mp3');
     musicAudio.loop = true;
+    musicAudio.volume = 1.0;
+    musicAudio.preload = 'auto';
+    if (audioCtx && musicMaster && !musicSourceNode) {
+      musicSourceNode = audioCtx.createMediaElementSource(musicAudio);
+      musicSourceNode.connect(musicMaster);
+    }
   }
   updateAudioVolumes();
   if (musicAudio) {
@@ -821,23 +877,26 @@ function animate() {
   jelly.rotation.z += (Math.sin(time * 0.115) * 0.08 - jelly.rotation.z) * 0.020;
   jelly.rotation.x += (Math.sin(time * 0.092 + 1.4) * 0.045 - jelly.rotation.x) * 0.018;
 
-  bellTouchPulse *= 0.92;
+  bellTouchTarget *= 0.986;
+  bellTouchPulse += (bellTouchTarget - bellTouchPulse) * 0.035;
+  bellGlowFlash *= 0.875;
   tentacleRubPulse *= 0.90;
 
   const touchBoost = bellTouchPulse;
-  bell.scale.set(1 + softPulse * 0.13 + touchBoost * 0.07, 1 - softPulse * 0.16 - touchBoost * 0.07, 1 + softPulse * 0.13 + touchBoost * 0.07);
-  innerBell.scale.set(1 + softPulse * 0.09 + touchBoost * 0.04, 1 - softPulse * 0.10 - touchBoost * 0.04, 1 + softPulse * 0.09 + touchBoost * 0.04);
-  core.scale.set(0.82 + softPulse * 0.10 + touchBoost * 0.05, 1.72 - softPulse * 0.14 - touchBoost * 0.08, 0.62 + softPulse * 0.08 + touchBoost * 0.04);
-  capGlow.scale.set(1.05 + softPulse * 0.08 + touchBoost * 0.08, 0.55 + softPulse * 0.05 + touchBoost * 0.04, 0.88 + softPulse * 0.08 + touchBoost * 0.08);
-  rim1.scale.set(1 + softPulse * 0.11 + touchBoost * 0.08, 1 + softPulse * 0.11 + touchBoost * 0.08, 0.82);
-  rim2.scale.set(1 + softPulse * 0.08 + touchBoost * 0.05, 1 + softPulse * 0.08 + touchBoost * 0.05, 0.77);
-  aura.scale.setScalar(1 + softPulse * 0.08 + touchBoost * 0.12);
+  const flashBoost = bellGlowFlash;
+  bell.scale.set(1 + softPulse * 0.13 + touchBoost * 0.12, 1 - softPulse * 0.16 - touchBoost * 0.13, 1 + softPulse * 0.13 + touchBoost * 0.12);
+  innerBell.scale.set(1 + softPulse * 0.09 + touchBoost * 0.065, 1 - softPulse * 0.10 - touchBoost * 0.065, 1 + softPulse * 0.09 + touchBoost * 0.065);
+  core.scale.set(0.82 + softPulse * 0.10 + touchBoost * 0.055, 1.72 - softPulse * 0.14 - touchBoost * 0.11, 0.62 + softPulse * 0.08 + touchBoost * 0.05);
+  capGlow.scale.set(1.05 + softPulse * 0.08 + touchBoost * 0.10 + flashBoost * 0.10, 0.55 + softPulse * 0.05 + touchBoost * 0.05, 0.88 + softPulse * 0.08 + touchBoost * 0.10 + flashBoost * 0.10);
+  rim1.scale.set(1 + softPulse * 0.11 + touchBoost * 0.10, 1 + softPulse * 0.11 + touchBoost * 0.10, 0.82);
+  rim2.scale.set(1 + softPulse * 0.08 + touchBoost * 0.07, 1 + softPulse * 0.08 + touchBoost * 0.07, 0.77);
+  aura.scale.setScalar(1 + softPulse * 0.08 + touchBoost * 0.14 + flashBoost * 0.08);
 
-  glow1.material.opacity = 0.38 + softPulse * 0.24 + touchBoost * 0.22;
-  glow2.material.opacity = 0.16 + softPulse * 0.16 + touchBoost * 0.16;
-  bell.material.emissiveIntensity = 1.05 + softPulse * 0.78 + touchBoost * 0.90;
-  rim1.material.opacity = 0.72 + softPulse * 0.24 + touchBoost * 0.16;
-  rim2.material.opacity = 0.44 + softPulse * 0.22 + touchBoost * 0.10;
+  glow1.material.opacity = 0.38 + softPulse * 0.24 + touchBoost * 0.16 + flashBoost * 0.42;
+  glow2.material.opacity = 0.16 + softPulse * 0.16 + touchBoost * 0.12 + flashBoost * 0.30;
+  bell.material.emissiveIntensity = 1.05 + softPulse * 0.78 + touchBoost * 0.62 + flashBoost * 1.45;
+  rim1.material.opacity = 0.72 + softPulse * 0.24 + touchBoost * 0.12 + flashBoost * 0.20;
+  rim2.material.opacity = 0.44 + softPulse * 0.22 + touchBoost * 0.08 + flashBoost * 0.12;
 
   speckGroup.children.forEach((s, i) => {
     s.material.opacity = 0.58 + Math.sin(time * 1.12 + i * 0.41) * 0.20;
@@ -851,7 +910,7 @@ function animate() {
   });
 
   jellyLight.position.copy(jelly.position);
-  jellyLight.intensity = 14.0 + softPulse * 8.0 + bellTouchPulse * 9.0 + tentacleRubPulse * 2.5;
+  jellyLight.intensity = 14.0 + softPulse * 8.0 + bellTouchPulse * 7.0 + bellGlowFlash * 15.0 + tentacleRubPulse * 2.0;
 
   controls.yaw += (controls.targetYaw - controls.yaw) * 0.012;
   controls.pitch += (controls.targetPitch - controls.pitch) * 0.012;
