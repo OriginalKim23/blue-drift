@@ -26,9 +26,12 @@ let touchVolume = 0.38;
 let bellTouchPulse = 0;
 let bellTouchTarget = 0;
 let bellGlowFlash = 0;
+let bellGlowTarget = 0;
 let tentacleRubPulse = 0;
 let lastHarpTime = 0;
+let lastTentacleGlowTime = 0;
 let lastTapTime = 0;
+let diveStartTime = null;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x000104, 0.085);
@@ -51,6 +54,11 @@ function pointerToNdc(x, y) {
   ndc.x = ((x - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((y - rect.top) / rect.height) * 2 + 1;
   return ndc;
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 // ---------- Background dome ----------
@@ -122,6 +130,7 @@ const particleMat = new THREE.ShaderMaterial({
   uniforms: {
     uTime: { value: 0 },
     uPixelRatio: { value: Math.min(window.devicePixelRatio, 1.65) },
+    uReveal: { value: 1 },
   },
   vertexShader: `
     uniform float uTime;
@@ -144,11 +153,12 @@ const particleMat = new THREE.ShaderMaterial({
     }
   `,
   fragmentShader: `
+    uniform float uReveal;
     varying float vAlpha;
     void main() {
       vec2 uv = gl_PointCoord - 0.5;
       float d = length(uv);
-      float alpha = smoothstep(0.52, 0.03, d) * vAlpha;
+      float alpha = smoothstep(0.52, 0.03, d) * vAlpha * uReveal;
       gl_FragColor = vec4(0.90, 0.97, 1.0, alpha);
     }
   `,
@@ -170,6 +180,31 @@ function makeGlowTexture() {
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeSoftRingTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const cx = size / 2;
+  const cy = size / 2;
+  const g = ctx.createRadialGradient(cx, cy, 8, cx, cy, size / 2);
+  g.addColorStop(0.00, 'rgba(0,0,0,0)');
+  g.addColorStop(0.30, 'rgba(0,0,0,0)');
+  g.addColorStop(0.43, 'rgba(118,232,255,0.10)');
+  g.addColorStop(0.52, 'rgba(184,248,255,0.42)');
+  g.addColorStop(0.63, 'rgba(58,150,255,0.16)');
+  g.addColorStop(0.82, 'rgba(20,80,255,0.04)');
+  g.addColorStop(1.00, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  ctx.filter = 'blur(2px)';
+  ctx.drawImage(canvas, 0, 0);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -411,6 +446,62 @@ const aura = addBasicMesh(new THREE.Mesh(
   })
 ));
 
+const softRingTex = makeSoftRingTexture();
+const touchRings = [];
+const tentacleGlows = [];
+
+function createTouchRing(worldPoint) {
+  const mat = new THREE.SpriteMaterial({
+    map: softRingTex,
+    color: 0x83eaff,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.position.copy(worldPoint);
+  sprite.scale.set(0.34, 0.34, 1);
+  scene.add(sprite);
+  touchRings.push({
+    sprite,
+    start: clock.getElapsedTime(),
+    duration: 1.65,
+    base: worldPoint.clone()
+  });
+}
+
+function createTentacleGlow(tube, worldPoint, strength = 1) {
+  if (tentacleGlows.length > 70) {
+    const old = tentacleGlows.shift();
+    scene.remove(old.sprite);
+    old.sprite.material.dispose();
+  }
+
+  const mat = new THREE.SpriteMaterial({
+    map: glowTex,
+    color: 0xa5f2ff,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.12, 0.12, 1);
+  scene.add(sprite);
+
+  const localPoint = tube.worldToLocal(worldPoint.clone());
+  tentacleGlows.push({
+    sprite,
+    tube,
+    local: localPoint,
+    start: clock.getElapsedTime(),
+    duration: 1.05 + Math.random() * 0.34,
+    drift: 0.10 + Math.random() * 0.22,
+    strength
+  });
+}
+
 // ---------- Tube animation ----------
 function updateTubeMesh(mesh, time, breath) {
   const d = mesh.userData;
@@ -482,8 +573,9 @@ function raycastAt(clientX, clientY, objects) {
 function handleTap(clientX, clientY) {
   const bellHits = raycastAt(clientX, clientY, [bell, innerBell, capGlow, core, rim1, rim2]);
   if (bellHits.length > 0) {
-    bellTouchTarget = Math.max(bellTouchTarget, 1.12);
-    bellGlowFlash = 1.0;
+    bellTouchTarget = Math.max(bellTouchTarget, 1.05);
+    bellGlowTarget = Math.max(bellGlowTarget, 1.0);
+    createTouchRing(bellHits[0].point);
     playBloomTone();
     return;
   }
@@ -500,14 +592,32 @@ function handleTap(clientX, clientY) {
 function checkTentacleRub(clientX, clientY) {
   if (!dynamicTubes || dynamicTubes.length === 0) return;
   const hits = raycastAt(clientX, clientY, dynamicTubes);
-  const hit = hits.find((h) => h.object.userData && (h.object.userData.kind === 'tentacle' || h.object.userData.kind === 'hair'));
-  if (!hit) return;
+  const touched = [];
+  const seen = new Set();
+
+  for (const h of hits) {
+    const kind = h.object.userData?.kind;
+    if ((kind === 'tentacle' || kind === 'hair') && !seen.has(h.object.uuid)) {
+      seen.add(h.object.uuid);
+      touched.push(h);
+      if (touched.length >= 5) break;
+    }
+  }
+  if (touched.length === 0) return;
 
   const now = performance.now();
   tentacleRubPulse = 1.0;
+
+  if (now - lastTentacleGlowTime > 55) {
+    lastTentacleGlowTime = now;
+    for (const h of touched) {
+      createTentacleGlow(h.object, h.point, h.object.userData.kind === 'hair' ? 0.72 : 1.0);
+    }
+  }
+
   if (now - lastHarpTime > 180) {
     lastHarpTime = now;
-    playHarpTone(hit.point.y);
+    playHarpTone(touched[0].point.y);
   }
 }
 
@@ -833,6 +943,7 @@ musicToggle.addEventListener('change', () => {
 });
 
 startButton.addEventListener('click', () => {
+  diveStartTime = clock.getElapsedTime();
   setupAudio();
   startOverlay.style.opacity = '0';
   setTimeout(() => startOverlay.remove(), 1100);
@@ -855,7 +966,13 @@ function animate() {
   requestAnimationFrame(animate);
 
   const time = clock.getElapsedTime();
+  const introElapsed = diveStartTime === null ? 3.0 : Math.max(0, time - diveStartTime);
+  const introGlow = smoothstep(0.25, 1.35, introElapsed);
+  const introBody = smoothstep(0.55, 2.35, introElapsed);
+  const introParticles = smoothstep(0.90, 2.80, introElapsed);
+
   particleMat.uniforms.uTime.value = time;
+  particleMat.uniforms.uReveal.value = introParticles;
   particles.rotation.y = Math.sin(time * 0.018) * 0.08;
   particles.rotation.x = Math.sin(time * 0.012 + 1.2) * 0.035;
 
@@ -877,9 +994,10 @@ function animate() {
   jelly.rotation.z += (Math.sin(time * 0.115) * 0.08 - jelly.rotation.z) * 0.020;
   jelly.rotation.x += (Math.sin(time * 0.092 + 1.4) * 0.045 - jelly.rotation.x) * 0.018;
 
-  bellTouchTarget *= 0.986;
-  bellTouchPulse += (bellTouchTarget - bellTouchPulse) * 0.035;
-  bellGlowFlash *= 0.875;
+  bellTouchTarget *= 0.956;
+  bellTouchPulse += (bellTouchTarget - bellTouchPulse) * 0.115;
+  bellGlowTarget *= 0.938;
+  bellGlowFlash += (bellGlowTarget - bellGlowFlash) * 0.105;
   tentacleRubPulse *= 0.90;
 
   const touchBoost = bellTouchPulse;
@@ -892,25 +1010,69 @@ function animate() {
   rim2.scale.set(1 + softPulse * 0.08 + touchBoost * 0.07, 1 + softPulse * 0.08 + touchBoost * 0.07, 0.77);
   aura.scale.setScalar(1 + softPulse * 0.08 + touchBoost * 0.14 + flashBoost * 0.08);
 
-  glow1.material.opacity = 0.38 + softPulse * 0.24 + touchBoost * 0.16 + flashBoost * 0.42;
-  glow2.material.opacity = 0.16 + softPulse * 0.16 + touchBoost * 0.12 + flashBoost * 0.30;
-  bell.material.emissiveIntensity = 1.05 + softPulse * 0.78 + touchBoost * 0.62 + flashBoost * 1.45;
-  rim1.material.opacity = 0.72 + softPulse * 0.24 + touchBoost * 0.12 + flashBoost * 0.20;
-  rim2.material.opacity = 0.44 + softPulse * 0.22 + touchBoost * 0.08 + flashBoost * 0.12;
+  bell.material.opacity = 0.32 * introBody;
+  innerBell.material.opacity = (0.22 + flashBoost * 0.05) * introGlow;
+  capGlow.material.opacity = (0.20 + flashBoost * 0.18) * introGlow;
+  core.material.opacity = (0.38 + flashBoost * 0.20) * introGlow;
+  aura.material.opacity = (0.075 + flashBoost * 0.045) * introGlow;
+
+  glow1.material.opacity = (0.38 + softPulse * 0.24 + touchBoost * 0.12 + flashBoost * 0.34) * introGlow;
+  glow2.material.opacity = (0.16 + softPulse * 0.16 + touchBoost * 0.09 + flashBoost * 0.25) * introGlow;
+  bell.material.emissiveIntensity = (1.05 + softPulse * 0.78 + touchBoost * 0.54 + flashBoost * 1.20) * introGlow;
+  rim1.material.opacity = (0.72 + softPulse * 0.24 + touchBoost * 0.10 + flashBoost * 0.15) * introGlow;
+  rim2.material.opacity = (0.44 + softPulse * 0.22 + touchBoost * 0.06 + flashBoost * 0.10) * introGlow;
 
   speckGroup.children.forEach((s, i) => {
-    s.material.opacity = 0.58 + Math.sin(time * 1.12 + i * 0.41) * 0.20;
+    s.material.opacity = (0.58 + Math.sin(time * 1.12 + i * 0.41) * 0.20) * introBody;
   });
 
   dynamicTubes.forEach((tube) => {
     updateTubeMesh(tube, time, breath);
     if (tube.userData.kind === 'tentacle' || tube.userData.kind === 'hair') {
-      tube.material.opacity = tube.userData.baseOpacity + tentacleRubPulse * 0.22;
+      tube.material.opacity = (tube.userData.baseOpacity + tentacleRubPulse * 0.12) * introBody;
+    } else {
+      tube.material.opacity = tube.userData.baseOpacity * introBody;
     }
   });
 
   jellyLight.position.copy(jelly.position);
-  jellyLight.intensity = 14.0 + softPulse * 8.0 + bellTouchPulse * 7.0 + bellGlowFlash * 15.0 + tentacleRubPulse * 2.0;
+  jellyLight.intensity = (14.0 + softPulse * 8.0 + bellTouchPulse * 5.5 + bellGlowFlash * 11.5 + tentacleRubPulse * 1.8) * introGlow;
+
+  for (let i = touchRings.length - 1; i >= 0; i--) {
+    const ring = touchRings[i];
+    const t = (time - ring.start) / ring.duration;
+    if (t >= 1) {
+      scene.remove(ring.sprite);
+      ring.sprite.material.dispose();
+      touchRings.splice(i, 1);
+      continue;
+    }
+    const ease = smoothstep(0, 1, t);
+    const alpha = Math.sin(Math.PI * t) * 0.22 * introGlow;
+    ring.sprite.position.copy(ring.base);
+    ring.sprite.scale.setScalar(0.55 + ease * 2.05);
+    ring.sprite.material.opacity = alpha;
+  }
+
+  for (let i = tentacleGlows.length - 1; i >= 0; i--) {
+    const g = tentacleGlows[i];
+    const t = (time - g.start) / g.duration;
+    if (t >= 1) {
+      scene.remove(g.sprite);
+      g.sprite.material.dispose();
+      tentacleGlows.splice(i, 1);
+      continue;
+    }
+    const local = g.local.clone();
+    local.y -= g.drift * t;
+    local.x += Math.sin(t * Math.PI * 2 + g.drift * 10.0) * 0.018 * t;
+    local.z += Math.cos(t * Math.PI * 2 + g.drift * 8.0) * 0.014 * t;
+    const world = g.tube.localToWorld(local);
+    g.sprite.position.copy(world);
+    const envelope = Math.sin(Math.PI * t);
+    g.sprite.material.opacity = envelope * 0.58 * g.strength * introBody;
+    g.sprite.scale.setScalar((0.10 + envelope * 0.24) * g.strength);
+  }
 
   controls.yaw += (controls.targetYaw - controls.yaw) * 0.012;
   controls.pitch += (controls.targetPitch - controls.pitch) * 0.012;
