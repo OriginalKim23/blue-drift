@@ -33,48 +33,6 @@
 |---|---|
 | 드래그 | 시야 회전 |
 | 마우스 휠 / 핀치 | 접근 또는 후퇴 |
-| 해파리 갓 터치 | 발광 및 촉수 웨이브 |
-| 촉수 문지르기 | 가닥별 빛 반응과 소리 |
-| 설정 버튼 | 수중음, 음악, 터치음 조절 |
-
-## 실행 방법
-
-이 프로젝트는 정적 웹 파일로 구성되어 있습니다.
-
-로컬에서 실행하려면 간단한 로컬 서버를 사용하세요.
-
-예시:
-```bash
-npx serve .
-
-또는 VS Code의 Live Server 확장으로 index.html을 열어도 됩니다.
-
-GitHub Pages 배포
-
-저장소 루트에 아래 파일들이 있어야 합니다.
-
-index.html
-style.css
-main.js
-music.mp3
-.nojekyll
-README.md
-
-GitHub에서 다음 순서로 설정합니다.
-
-저장소의 Settings로 이동
-Pages 메뉴 선택
-Source를 Deploy from a branch로 설정
-Branch를 main, 폴더를 /root로 선택
-Save
-배포 주소가 생성될 때까지 잠시 기다리기
-파일 구성
-index.html    화면 구조
-style.css     UI와 오버레이 스타일
-main.js       3D 렌더링, 인터랙션, 오디오 로직
-music.mp3     배경 음악 파일
-.nojekyll     GitHub Pages 정적 파일 처리용
-README.md     프로젝트 설명
 제작 의도
 
 빠르게 반응하는 게임보다는
@@ -84,5 +42,6 @@ README.md     프로젝트 설명
 그저 빛나고, 떠 있고, 터치에 아주 조금 반응합니다.
 
 물은 아무것도 서두르지 않습니다.
-```bash
-npx serve .
+| 해파리 갓 터치 | 발광 및 촉수 웨이브 |
+| 촉수 문지르기 | 가닥별 빛 반응과 소리 |
+| 설정 버튼 | 수중음, 음악, 터치음 조절 |
