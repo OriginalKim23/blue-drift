@@ -14,9 +14,12 @@ const touchVolumeInput = document.getElementById('touchVolume');
 let audioCtx = null;
 let underwaterMaster = null;
 let touchMaster = null;
-let musicAudio = null;
+let musicBuffer = null;
 let musicMaster = null;
 let musicSourceNode = null;
+let musicLoadPromise = null;
+let musicLoopStart = 0;
+let musicLoopEnd = 0;
 let audioStarted = false;
 
 let underwaterVolume = 0.38;
@@ -27,6 +30,9 @@ let bellTouchPulse = 0;
 let bellTouchTarget = 0;
 let bellGlowWave = 0;
 let bellGlowTarget = 0;
+let bellShockWave = 0;
+let bellShockTarget = 0;
+let bellShockStart = -99;
 let tentacleRubPulse = 0;
 let lastHarpTime = 0;
 let lastTapTime = 0;
@@ -114,20 +120,42 @@ const particleCount = 1800;
 const pPositions = new Float32Array(particleCount * 3);
 const pSizes = new Float32Array(particleCount);
 const pBrightness = new Float32Array(particleCount);
+const pSoftness = new Float32Array(particleCount);
+const pSeed = new Float32Array(particleCount);
 
 for (let i = 0; i < particleCount; i++) {
   pPositions[i * 3 + 0] = (Math.random() - 0.5) * 28;
   pPositions[i * 3 + 1] = (Math.random() - 0.5) * 18;
   pPositions[i * 3 + 2] = (Math.random() - 0.5) * 24;
-  const near = Math.random() > 0.86;
-  pSizes[i] = near ? 1.2 + Math.random() * 1.4 : 0.45 + Math.random() * 0.8;
-  pBrightness[i] = near ? 1.0 : 0.45 + Math.random() * 0.45;
+
+  const r = Math.random();
+  const near = r > 0.90;
+  const misty = r < 0.24;
+
+  pSizes[i] =
+    near ? 0.95 + Math.random() * 1.10 :
+    misty ? 0.52 + Math.random() * 0.75 :
+    0.26 + Math.random() * 0.48;
+
+  pBrightness[i] =
+    near ? 0.85 + Math.random() * 0.25 :
+    misty ? 0.42 + Math.random() * 0.25 :
+    0.46 + Math.random() * 0.28;
+
+  pSoftness[i] =
+    near ? 0.50 + Math.random() * 0.25 :
+    misty ? 0.78 + Math.random() * 0.18 :
+    0.18 + Math.random() * 0.32;
+
+  pSeed[i] = Math.random();
 }
 
 const particleGeo = new THREE.BufferGeometry();
 particleGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
 particleGeo.setAttribute('aSize', new THREE.BufferAttribute(pSizes, 1));
 particleGeo.setAttribute('aBrightness', new THREE.BufferAttribute(pBrightness, 1));
+particleGeo.setAttribute('aSoftness', new THREE.BufferAttribute(pSoftness, 1));
+particleGeo.setAttribute('aSeed', new THREE.BufferAttribute(pSeed, 1));
 
 const particleMat = new THREE.ShaderMaterial({
   transparent: true,
@@ -143,29 +171,59 @@ const particleMat = new THREE.ShaderMaterial({
     uniform float uPixelRatio;
     attribute float aSize;
     attribute float aBrightness;
+    attribute float aSoftness;
+    attribute float aSeed;
     varying float vAlpha;
+    varying float vSoftness;
+    varying float vSeed;
 
     void main() {
       vec3 p = position;
-      p.x += sin(uTime * 0.045 + position.y * 0.23) * 0.07;
-      p.y += sin(uTime * 0.035 + position.x * 0.17) * 0.05;
-      p.z += sin(uTime * 0.026 + position.x * 0.11 + position.y * 0.08) * 0.08;
+      float driftSeed = aSeed * 6.28318;
+      p.x += sin(uTime * 0.045 + position.y * 0.23 + driftSeed) * (0.05 + aSoftness * 0.05);
+      p.y += sin(uTime * 0.035 + position.x * 0.17 + driftSeed * 0.7) * (0.04 + aSoftness * 0.03);
+      p.z += sin(uTime * 0.026 + position.x * 0.11 + position.y * 0.08 + driftSeed * 0.5) * (0.05 + aSoftness * 0.05);
 
       vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
       gl_Position = projectionMatrix * mvPosition;
 
-      gl_PointSize = (1.05 + aSize * 2.35) * uPixelRatio * (18.0 / -mvPosition.z);
-      vAlpha = (0.06 + aSize * 0.16) * aBrightness;
+      gl_PointSize = (0.9 + aSize * 2.1) * uPixelRatio * (18.0 / -mvPosition.z);
+      vAlpha = (0.05 + aSize * 0.18) * aBrightness;
+      vSoftness = aSoftness;
+      vSeed = aSeed;
     }
   `,
   fragmentShader: `
     uniform float uReveal;
     varying float vAlpha;
+    varying float vSoftness;
+    varying float vSeed;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
     void main() {
       vec2 uv = gl_PointCoord - 0.5;
-      float d = length(uv);
-      float alpha = smoothstep(0.52, 0.03, d) * vAlpha * uReveal;
-      gl_FragColor = vec4(0.90, 0.97, 1.0, alpha);
+      float theta = vSeed * 6.28318;
+      vec2 axis = vec2(cos(theta), sin(theta));
+      vec2 drift = axis * (0.04 + vSoftness * 0.07);
+      vec2 warped = uv + drift * 0.35;
+      warped.x *= 1.0 + (vSoftness - 0.5) * 0.25;
+      warped.y *= 1.0 - (vSoftness - 0.5) * 0.16;
+
+      float r = length(warped);
+      float softBody = smoothstep(0.58, 0.03, r);
+      float crispCore = smoothstep(0.22 + vSoftness * 0.08, 0.0, length(uv + drift * 0.18));
+      float sideDust = smoothstep(0.18, 0.0, length(uv - drift * 0.45));
+
+      float grain = hash(gl_PointCoord * 19.3 + vSeed * 13.7);
+      float sparkle = mix(0.85, 1.10, grain);
+      float alpha = mix(crispCore * 1.15, softBody * 0.88 + sideDust * 0.26, vSoftness);
+      alpha *= sparkle * vAlpha * uReveal;
+
+      vec3 col = mix(vec3(0.92, 0.97, 1.0), vec3(0.82, 0.92, 1.0), vSoftness * 0.35);
+      gl_FragColor = vec4(col, alpha);
     }
   `,
 });
@@ -358,7 +416,7 @@ function addTubeObject(kind, index, angle, radius, len, thickness, color, opacit
   jelly.add(mesh);
 
   if (kind === 'tentacle' || kind === 'hair') {
-    const helperThickness = kind === 'hair' ? thickness * 2.6 : thickness * 1.25;
+    const helperThickness = kind === 'hair' ? thickness * 4.8 : thickness * 2.18;
     const helper = buildTube(pts, helperThickness, kind === 'oral' ? 7 : 4, color, 0.0);
     helper.material.transparent = true;
     helper.material.opacity = 0.0;
@@ -576,41 +634,79 @@ function updateTubeMesh(mesh, time, breath) {
   const count = isOral ? 16 : 20;
   const bellPump = (breath - 0.5) * 2.0;
   const recoil = 1.0 - breath;
+  const shockAge = Math.max(0, time - bellShockStart);
+
+  const rub = d.rub || 0;
+  const rubX = d.rubX || 0;
+  const rubY = d.rubY || 0;
 
   for (let j = 0; j < count; j++) {
     const t = j / (count - 1);
     const lag = t * (isOral ? 2.7 : 4.8);
-    const slow = isHair ? 0.78 : 1.0;
+    const slow = isHair ? 0.86 : 1.0;
 
-    const flowA = Math.sin(time * 0.42 + d.phase - lag + d.index * 0.071);
-    const flowB = Math.sin(time * 0.18 + d.phase * 0.65 + t * 8.2);
-    const flowC = Math.cos(time * 0.31 + d.phase * 1.15 - lag * 0.72);
+    const flowA = Math.sin(time * 0.30 + d.phase - lag + d.index * 0.071);
+    const flowB = Math.sin(time * 0.145 + d.phase * 0.65 + t * 6.4);
+    const flowC = Math.cos(time * 0.215 + d.phase * 1.10 - lag * 0.62);
 
     const angleDrift =
       d.angle +
-      Math.sin(time * 0.070 + d.phase) * 0.10 +
-      Math.sin(time * 0.155 + d.phase - lag) * 0.045 * t;
+      Math.sin(time * 0.056 + d.phase) * 0.10 +
+      Math.sin(time * 0.112 + d.phase - lag) * 0.050 * t;
 
-    const rootPulse = 1 + bellPump * (isOral ? 0.050 : 0.090) * (1 - t * 0.48);
+    const rootFollow = isOral
+      ? (0.28 + t * 0.72)
+      : (0.24 + t * 0.76);
+
+    const rootPulse = 1 + bellPump * (isOral ? 0.050 : 0.068) * rootFollow;
     const baseRadius = isOral
-      ? (d.radius + Math.sin(t * 3.4 + time * 0.13 + d.phase) * 0.045) * rootPulse
-      : d.radius * (1 - t * 0.095) * rootPulse;
+      ? (d.radius + Math.sin(t * 3.1 + time * 0.10 + d.phase) * 0.040) * rootPulse
+      : d.radius * (1 - t * 0.088) * rootPulse;
 
     const sideX = Math.cos(angleDrift + Math.PI / 2);
     const sideZ = Math.sin(angleDrift + Math.PI / 2);
 
-    const sideAmp = isOral ? (0.045 + t * 0.28) : (isHair ? 0.035 + t * 0.42 : 0.050 + t * 0.62);
-    const depthAmp = isOral ? (0.030 + t * 0.20) : (isHair ? 0.030 + t * 0.26 : 0.040 + t * 0.38);
+    // 기본 흐느적거림 강화
+    const sideAmp = isOral ? (0.040 + t * 0.28) : (isHair ? 0.032 + t * 0.37 : 0.050 + t * 0.58);
+    const depthAmp = isOral ? (0.028 + t * 0.18) : (isHair ? 0.026 + t * 0.24 : 0.040 + t * 0.37);
 
-    const sideWave = (flowA * sideAmp + flowB * (0.018 + t * 0.16)) * slow;
-    const depthWave = (flowC * depthAmp + Math.sin(time * 0.095 + t * 4.8 + d.phase) * 0.060 * t) * slow;
+    const sideWave = (flowA * sideAmp + flowB * (0.016 + t * 0.13)) * slow;
+    const depthWave = (flowC * depthAmp + Math.sin(time * 0.072 + t * 4.0 + d.phase) * 0.050 * t) * slow;
 
-    const pumpLift = bellPump * (isOral ? 0.10 : 0.18) * (1 - t * 0.34) - recoil * 0.018;
-    const delayedY = Math.sin(time * 0.36 + d.phase - lag * 0.86) * (isOral ? 0.055 : 0.105) * t;
+    const rootY = isOral ? -0.22 : -0.11;
 
-    const x = Math.cos(angleDrift) * baseRadius + sideX * sideWave;
-    const y = (isOral ? -0.18 : -0.04) - t * d.len + pumpLift + delayedY - breath * 0.020;
-    const z = Math.sin(angleDrift) * baseRadius + sideZ * depthWave;
+    const pulseDown = bellPump * (isOral ? 0.050 : 0.078) * (0.28 + t * 0.72);
+    const delayedY = Math.sin(time * 0.24 + d.phase - lag * 0.84) * (isOral ? 0.036 : 0.075) * (0.12 + t * 0.88);
+
+    // 머리 터치 시: 시작부부터 훅 반응하고, 긴 큰 물결이 끝까지 전달.
+    const travelDelay = t * (isOral ? 0.36 : 0.50);
+    const localAge = shockAge - travelDelay;
+    const waveLead = smoothstep(0.0, 0.12, localAge);
+    const waveFade = 1.0 - smoothstep(isOral ? 2.25 : 2.70, isOral ? 4.00 : 4.85, localAge);
+    const waveWindow = Math.max(0.0, waveLead * waveFade);
+
+    const mainWave = Math.sin(Math.min(Math.PI, Math.max(0.0, localAge) * (isOral ? 1.25 : 1.05)));
+    const trailingWave = Math.sin(Math.max(0.0, localAge) * (isOral ? 3.1 : 2.7) - t * 2.6 + d.phase * 0.22)
+      * smoothstep(0.18, 0.55, localAge)
+      * (1.0 - smoothstep(isOral ? 2.6 : 3.0, isOral ? 4.2 : 5.0, localAge));
+
+    const shockPulse = bellShockWave * (mainWave * 0.95 + trailingWave * 0.20) * waveWindow;
+
+    const waveStrength = isOral ? (0.055 + t * 0.13) : (0.085 + t * 0.24);
+    const shockSide = shockPulse * waveStrength * 0.92;
+    const shockDepth = shockPulse * waveStrength * 0.68;
+    const shockDrop = -Math.abs(shockPulse) * (isOral ? (0.020 + t * 0.060) : (0.035 + t * 0.105));
+    const rootDip = -Math.abs(shockPulse) * (isOral ? 0.022 : 0.034) * (0.75 + t * 0.25);
+
+    // 문지름 미세 반응
+    const rubLag = smoothstep(0.08, 0.88, t);
+    const rubSide = rub * rubLag * rubX * (isOral ? 0.24 : 0.54);
+    const rubDepth = rub * rubLag * rubY * (isOral ? 0.16 : 0.32);
+    const rubDrop = -Math.abs(rub * rubLag) * (isOral ? 0.010 : 0.020);
+
+    const x = Math.cos(angleDrift) * baseRadius + sideX * (sideWave + shockSide + rubSide);
+    const y = rootY - t * d.len + pulseDown + delayedY + shockDrop + rootDip + rubDrop - recoil * 0.013;
+    const z = Math.sin(angleDrift) * baseRadius + sideZ * (depthWave + shockDepth + rubDepth);
 
     pts.push(new THREE.Vector3(x, y, z));
   }
@@ -696,6 +792,8 @@ function handleTap(clientX, clientY) {
   if (bellHits.length > 0) {
     bellTouchTarget = Math.max(bellTouchTarget, 1.0);
     bellGlowTarget = Math.max(bellGlowTarget, 1.0);
+    bellShockTarget = Math.max(bellShockTarget, 1.32);
+    bellShockStart = clock.getElapsedTime();
     playBloomTone();
     return;
   }
@@ -709,9 +807,22 @@ function handleTap(clientX, clientY) {
   lastTapTime = now;
 }
 
-function checkTentacleRub(clientX, clientY) {
+function tentaclePitchValue(tube, worldPoint) {
+  if (!tube || !worldPoint || !tube.userData) return 0.5;
+  const local = tube.worldToLocal(worldPoint.clone());
+  const len = Math.max(0.001, tube.userData.len || 5.0);
+  const rootY = tube.userData.kind === 'oral' ? -0.22 : -0.11;
+  // root 근처 0, 촉수 끝으로 갈수록 1.
+  // 살짝 과장해서 끝으로 갈수록 음 차이가 더 크게 느껴지게.
+  let norm = THREE.MathUtils.clamp((rootY - local.y) / len, 0, 1);
+  norm = Math.pow(norm, 0.82);
+  return norm;
+}
+
+function checkTentacleRub(clientX, clientY, moveDX = 0, moveDY = 0) {
   if (!dynamicTubes || dynamicTubes.length === 0) return;
 
+  // 5174의 차분한 감성은 유지하되, 정말 살짝만 더 잘 잡히게.
   const hits = raycastAt(clientX, clientY, dynamicTubes);
   const touched = [];
   const seen = new Set();
@@ -720,25 +831,40 @@ function checkTentacleRub(clientX, clientY) {
     const kind = h.object.userData && h.object.userData.kind;
     if ((kind === 'tentacle' || kind === 'hair') && !seen.has(h.object.uuid)) {
       seen.add(h.object.uuid);
-      touched.push(h);
+      touched.push({ tube: h.object, point: h.point, pitchValue: tentaclePitchValue(h.object, h.point), strength: touched.length === 0 ? 0.72 : 0.44 });
       if (touched.length >= 3) break;
+    }
+  }
+
+  // 히트가 전혀 없을 때만, 아주 작은 screen-space 보정으로 1가닥 정도만 보완.
+  if (touched.length === 0) {
+    const nearby = findNearbyTentaclesOnScreen(clientX, clientY, 18, 1);
+    if (nearby.length > 0) {
+      touched.push({ tube: nearby[0].tube, point: null, pitchValue: 0.5, strength: 0.52 });
     }
   }
 
   if (touched.length === 0) return;
 
   const now = performance.now();
-  tentacleRubPulse = 0.55;
+  tentacleRubPulse = 1.0;
+
+  const rubX = THREE.MathUtils.clamp(moveDX * 0.020, -0.22, 0.22);
+  const rubY = THREE.MathUtils.clamp(moveDY * 0.016, -0.18, 0.18);
 
   for (let i = 0; i < touched.length; i++) {
-    const tube = touched[i].object;
-    const strength = i === 0 ? 0.62 : 0.36;
-    tube.userData.touch = Math.max(tube.userData.touch || 0, strength);
+    const tube = touched[i].tube;
+    const s = touched[i].strength * (i === 0 ? 1.0 : 0.92);
+    tube.userData.touch = Math.max(tube.userData.touch || 0, s);
+    tube.userData.rub = Math.max(tube.userData.rub || 0, i === 0 ? 0.85 : 0.42);
+    tube.userData.rubX = (tube.userData.rubX || 0) * 0.35 + rubX;
+    tube.userData.rubY = (tube.userData.rubY || 0) * 0.35 + rubY;
   }
 
-  if (now - lastHarpTime > 280) {
+  // 따다다다 방지. 위치별 음 높낮이는 유지.
+  if (now - lastHarpTime > 285) {
     lastHarpTime = now;
-    playHarpTone(touched[0].point.y);
+    playHarpTone(touched[0].pitchValue ?? 0.5);
   }
 }
 
@@ -776,8 +902,10 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 
   if (!controls.dragging) return;
 
-  const dx = e.clientX - controls.lastX;
-  const dy = e.clientY - controls.lastY;
+  const prevX = controls.lastX;
+  const prevY = controls.lastY;
+  const dx = e.clientX - prevX;
+  const dy = e.clientY - prevY;
   controls.lastX = e.clientX;
   controls.lastY = e.clientY;
 
@@ -788,7 +916,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   controls.targetYaw -= dx * 0.00145;
   controls.targetPitch = THREE.MathUtils.clamp(controls.targetPitch - dy * 0.001, -0.55, 0.55);
 
-  checkTentacleRub(e.clientX, e.clientY);
+  checkTentacleRub(e.clientX, e.clientY, dx, dy);
 });
 
 function finishPointer(e) {
@@ -828,12 +956,114 @@ function updateAudioVolumes() {
   if (touchMaster && audioCtx) {
     touchMaster.gain.setTargetAtTime(touchVolume, audioCtx.currentTime, 0.04);
   }
-  if (musicAudio) {
-    musicAudio.volume = 1.0;
-  }
   if (musicMaster && audioCtx) {
     const targetMusicVolume = musicToggle.checked ? musicVolume : 0;
     musicMaster.gain.setTargetAtTime(targetMusicVolume, audioCtx.currentTime, 0.05);
+  }
+}
+
+
+function detectMusicLoopRegion(buffer) {
+  const sr = buffer.sampleRate;
+  const ch0 = buffer.getChannelData(0);
+  const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch0;
+  const step = 512;
+  const threshold = 0.0007;
+
+  let start = 0;
+  let end = ch0.length - 1;
+
+  for (let i = 0; i < ch0.length; i += step) {
+    let peak = 0;
+    for (let j = 0; j < step && i + j < ch0.length; j++) {
+      peak = Math.max(peak, Math.abs(ch0[i + j]), Math.abs(ch1[i + j]));
+    }
+    if (peak > threshold) {
+      start = i;
+      break;
+    }
+  }
+
+  for (let i = ch0.length - step; i >= 0; i -= step) {
+    let peak = 0;
+    for (let j = 0; j < step && i + j < ch0.length; j++) {
+      peak = Math.max(peak, Math.abs(ch0[i + j]), Math.abs(ch1[i + j]));
+    }
+    if (peak > threshold) {
+      end = Math.min(ch0.length - 1, i + step);
+      break;
+    }
+  }
+
+  const pad = Math.floor(sr * 0.035);
+  musicLoopStart = Math.max(0, (start - pad) / sr);
+  musicLoopEnd = Math.min(buffer.duration, (end + pad) / sr);
+
+  if (musicLoopEnd - musicLoopStart < 2.0) {
+    musicLoopStart = 0;
+    musicLoopEnd = buffer.duration;
+  }
+}
+
+async function loadMusicBuffer() {
+  if (musicBuffer) return musicBuffer;
+  if (!audioCtx) return null;
+
+  if (!musicLoadPromise) {
+    musicLoadPromise = fetch('./music.mp3')
+      .then((res) => {
+        if (!res.ok) throw new Error(`music.mp3 load failed: ${res.status}`);
+        return res.arrayBuffer();
+      })
+      .then((arrayBuffer) => audioCtx.decodeAudioData(arrayBuffer))
+      .then((buffer) => {
+        musicBuffer = buffer;
+        detectMusicLoopRegion(buffer);
+        return buffer;
+      });
+  }
+
+  return musicLoadPromise;
+}
+
+function stopMusicLoop() {
+  if (!musicSourceNode || !audioCtx) return;
+  try {
+    musicSourceNode.stop(audioCtx.currentTime + 0.03);
+  } catch (e) {}
+  try {
+    musicSourceNode.disconnect();
+  } catch (e) {}
+  musicSourceNode = null;
+}
+
+function startMusicLoop() {
+  if (!audioCtx || !musicMaster || !musicBuffer || musicSourceNode) return;
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = musicBuffer;
+  source.loop = true;
+  source.loopStart = musicLoopStart;
+  source.loopEnd = musicLoopEnd || musicBuffer.duration;
+  source.connect(musicMaster);
+  source.onended = () => {
+    if (musicSourceNode === source) {
+      musicSourceNode = null;
+    }
+  };
+  source.start(audioCtx.currentTime, musicLoopStart);
+  musicSourceNode = source;
+}
+
+async function ensureMusicLoop() {
+  if (!audioStarted || !audioCtx || !musicToggle.checked) return;
+
+  try {
+    await loadMusicBuffer();
+    if (!musicToggle.checked) return;
+    startMusicLoop();
+  } catch (e) {
+    console.warn('Music failed:', e);
   }
 }
 
@@ -914,17 +1144,9 @@ function setupAudio() {
 
     underwaterMaster.gain.linearRampToValueAtTime(underwaterVolume, audioCtx.currentTime + 3.6);
 
-    musicAudio = new Audio('./music.mp3');
-    musicAudio.loop = true;
-    musicAudio.volume = 1.0;
-    musicAudio.preload = 'auto';
-    if (musicMaster) {
-      musicSourceNode = audioCtx.createMediaElementSource(musicAudio);
-      musicSourceNode.connect(musicMaster);
-    }
     updateAudioVolumes();
     if (musicToggle.checked) {
-      musicAudio.play().catch(() => {});
+      ensureMusicLoop();
     }
   } catch (e) {
     console.warn('Audio failed:', e);
@@ -968,15 +1190,14 @@ function playBloomTone() {
   overtone.stop(now + 2.0);
 }
 
-function playHarpTone(hitY = 0) {
+function playHarpTone(hitValue = 0) {
   if (!audioCtx || !touchMaster) return;
 
   const now = audioCtx.currentTime;
-
-  // 위쪽은 낮고 묵직하게, 아래 촉수 끝으로 갈수록 조금 높고 얇게.
-  const scale = [196.00, 220.00, 261.63, 293.66, 329.63, 392.00, 440.00, 523.25];
-  const depth = THREE.MathUtils.clamp((-hitY + 0.85) / 5.4, 0, 1);
-  const idx = Math.min(scale.length - 1, Math.max(0, Math.floor(depth * (scale.length - 1))));
+  // 기존 음색은 유지하고, 위치별 높낮이 차이만 더 크게.
+  const scale = [164.81, 196.00, 220.00, 261.63, 329.63, 392.00, 493.88, 587.33, 698.46];
+  const normalized = THREE.MathUtils.clamp(hitValue, 0, 1);
+  const idx = THREE.MathUtils.clamp(Math.floor(normalized * (scale.length - 1) + 0.0001), 0, scale.length - 1);
   const freq = scale[idx];
 
   const carrier = audioCtx.createOscillator();
@@ -990,24 +1211,24 @@ function playHarpTone(hitY = 0) {
 
   carrier.type = 'sine';
   carrier.frequency.setValueAtTime(freq, now);
-  carrier.frequency.exponentialRampToValueAtTime(freq * 0.994, now + 1.25);
+  carrier.frequency.exponentialRampToValueAtTime(freq * 0.992, now + 1.55);
 
   shimmer.type = 'triangle';
-  shimmer.frequency.setValueAtTime(freq * 2.006, now);
-  shimmer.frequency.exponentialRampToValueAtTime(freq * 1.990, now + 1.25);
-  shimmerGain.gain.value = 0.085;
+  shimmer.frequency.setValueAtTime(freq * 2.01, now);
+  shimmer.frequency.exponentialRampToValueAtTime(freq * 1.985, now + 1.55);
+  shimmerGain.gain.value = 0.12;
 
   filter.type = 'bandpass';
-  filter.frequency.value = freq * 1.38;
-  filter.Q.value = 1.05;
+  filter.frequency.value = freq * 1.45;
+  filter.Q.value = 1.15;
 
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.018, now + 0.060);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.35);
+  gain.gain.exponentialRampToValueAtTime(0.023, now + 0.060);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.65);
 
-  delay.delayTime.value = 0.245;
-  feedback.gain.value = 0.18;
-  wet.gain.value = 0.20;
+  delay.delayTime.value = 0.235;
+  feedback.gain.value = 0.20;
+  wet.gain.value = 0.25;
 
   carrier.connect(filter);
   shimmer.connect(shimmerGain).connect(filter);
@@ -1018,8 +1239,8 @@ function playHarpTone(hitY = 0) {
 
   carrier.start(now);
   shimmer.start(now);
-  carrier.stop(now + 1.45);
-  shimmer.stop(now + 1.45);
+  carrier.stop(now + 1.75);
+  shimmer.stop(now + 1.75);
 }
 
 settingsButton.addEventListener('click', () => {
@@ -1046,23 +1267,11 @@ touchVolumeInput.addEventListener('input', () => {
 });
 
 musicToggle.addEventListener('change', () => {
-  if (!musicAudio && audioStarted) {
-    musicAudio = new Audio('./music.mp3');
-    musicAudio.loop = true;
-    musicAudio.volume = 1.0;
-    musicAudio.preload = 'auto';
-    if (audioCtx && musicMaster && !musicSourceNode) {
-      musicSourceNode = audioCtx.createMediaElementSource(musicAudio);
-      musicSourceNode.connect(musicMaster);
-    }
-  }
   updateAudioVolumes();
-  if (musicAudio) {
-    if (musicToggle.checked) {
-      musicAudio.play().catch(() => {});
-    } else {
-      musicAudio.pause();
-    }
+  if (musicToggle.checked) {
+    ensureMusicLoop();
+  } else {
+    stopMusicLoop();
   }
 });
 
@@ -1126,20 +1335,31 @@ function animate() {
   jelly.rotation.z += (Math.sin(time * 0.108) * 0.115 - jelly.rotation.z) * 0.024;
   jelly.rotation.x += (Math.sin(time * 0.088 + 1.4) * 0.065 - jelly.rotation.x) * 0.022;
 
-  bellTouchTarget *= 0.945;
-  bellTouchPulse += (bellTouchTarget - bellTouchPulse) * 0.13;
-  bellGlowTarget *= 0.946;
-  bellGlowWave += (bellGlowTarget - bellGlowWave) * 0.085;
+  bellTouchTarget *= 0.948;
+  bellTouchPulse += (bellTouchTarget - bellTouchPulse) * 0.15;
+  bellGlowTarget *= 0.950;
+  bellGlowWave += (bellGlowTarget - bellGlowWave) * 0.090;
+  bellShockTarget *= 0.968;
+  bellShockWave += (bellShockTarget - bellShockWave) * 0.082;
   tentacleRubPulse *= 0.90;
 
   const touchBoost = bellTouchPulse;
   const flashBoost = bellGlowWave;
-  bell.scale.set(1 + softPulse * 0.13 + touchBoost * 0.12, 1 - softPulse * 0.16 - touchBoost * 0.13, 1 + softPulse * 0.13 + touchBoost * 0.12);
-  innerBell.scale.set(1 + softPulse * 0.09 + touchBoost * 0.065, 1 - softPulse * 0.10 - touchBoost * 0.065, 1 + softPulse * 0.09 + touchBoost * 0.065);
-  core.scale.set(0.82 + softPulse * 0.10 + touchBoost * 0.055, 1.72 - softPulse * 0.14 - touchBoost * 0.11, 0.62 + softPulse * 0.08 + touchBoost * 0.05);
-  capGlow.scale.set(1.05 + softPulse * 0.08 + touchBoost * 0.10 + flashBoost * 0.10, 0.55 + softPulse * 0.05 + touchBoost * 0.05, 0.88 + softPulse * 0.08 + touchBoost * 0.10 + flashBoost * 0.10);
-  rim1.scale.set(1 + softPulse * 0.11 + touchBoost * 0.10, 1 + softPulse * 0.11 + touchBoost * 0.10, 0.82);
-  rim2.scale.set(1 + softPulse * 0.08 + touchBoost * 0.07, 1 + softPulse * 0.08 + touchBoost * 0.07, 0.77);
+  const bellPress = softPulse * 0.23 + touchBoost * 0.34;
+  const bellExpand = softPulse * 0.17 + touchBoost * 0.24;
+
+  bell.scale.set(1 + bellExpand, 1 - bellPress, 1 + bellExpand);
+  bell.position.y = -bellPress * 0.04;
+  innerBell.scale.set(1 + softPulse * 0.11 + touchBoost * 0.10, 1 - softPulse * 0.14 - touchBoost * 0.12, 1 + softPulse * 0.11 + touchBoost * 0.10);
+  innerBell.position.y = -0.02 - bellPress * 0.03;
+  core.scale.set(0.82 + softPulse * 0.12 + touchBoost * 0.08, 1.72 - softPulse * 0.20 - touchBoost * 0.15, 0.62 + softPulse * 0.10 + touchBoost * 0.06);
+  core.position.y = -0.42 - bellPress * 0.05;
+  capGlow.scale.set(1.05 + softPulse * 0.09 + touchBoost * 0.11 + flashBoost * 0.12, 0.55 + softPulse * 0.04 + touchBoost * 0.05, 0.88 + softPulse * 0.09 + touchBoost * 0.11 + flashBoost * 0.12);
+  capGlow.position.y = -0.48 - bellPress * 0.05;
+  rim1.scale.set(1 + softPulse * 0.13 + touchBoost * 0.13, 1 + softPulse * 0.13 + touchBoost * 0.13, 0.82);
+  rim1.position.y = -0.02 - bellPress * 0.04;
+  rim2.scale.set(1 + softPulse * 0.10 + touchBoost * 0.09, 1 + softPulse * 0.10 + touchBoost * 0.09, 0.77);
+  rim2.position.y = -0.17 - bellPress * 0.05;
   aura.scale.setScalar(1 + softPulse * 0.08 + touchBoost * 0.14 + flashBoost * 0.08);
 
   bell.material.opacity = 0.32 * introBody;
@@ -1150,10 +1370,10 @@ function animate() {
 
   glow1.material.opacity = (0.38 + softPulse * 0.24 + touchBoost * 0.10 + flashBoost * 0.62) * introBody;
   glow2.material.opacity = (0.16 + softPulse * 0.16 + touchBoost * 0.08 + flashBoost * 0.42) * introBody;
-  seaGlow.material.opacity = (0.010 + flashBoost * 0.085) * introBody;
+  seaGlow.material.opacity = (0.010 + flashBoost * 0.060) * introBody;
   glow1.scale.set(5.2 + flashBoost * 3.5, 5.2 + flashBoost * 3.5, 1);
   glow2.scale.set(2.5 + flashBoost * 1.8, 2.5 + flashBoost * 1.8, 1);
-  seaGlow.scale.set(18.0 + flashBoost * 16.0, 18.0 + flashBoost * 16.0, 1);
+  seaGlow.scale.set(18.0 + flashBoost * 14.0, 18.0 + flashBoost * 14.0, 1);
 
   bell.material.emissiveIntensity = (1.05 + softPulse * 0.78 + touchBoost * 0.45 + flashBoost * 1.60) * introBody;
   rim1.material.opacity = (0.72 + softPulse * 0.24 + touchBoost * 0.08 + flashBoost * 0.16) * introBody;
@@ -1167,11 +1387,14 @@ function animate() {
     updateTubeMesh(tube, time, breath);
 
     const fiberTouch = tube.userData.touch || 0;
-    tube.userData.touch = fiberTouch * 0.910;
+    tube.userData.touch = fiberTouch * 0.926;
+    tube.userData.rub = (tube.userData.rub || 0) * 0.920;
+    tube.userData.rubX = (tube.userData.rubX || 0) * 0.900;
+    tube.userData.rubY = (tube.userData.rubY || 0) * 0.900;
 
     if (tube.userData.kind === 'tentacle' || tube.userData.kind === 'hair') {
-      tube.material.opacity = (tube.userData.baseOpacity + fiberTouch * 0.30) * introBody;
-      tube.material.color.copy(tube.userData.baseColor).lerp(new THREE.Color(0xd6f8ff), Math.min(1, fiberTouch * 0.45));
+      tube.material.opacity = (tube.userData.baseOpacity + fiberTouch * 0.34) * introBody;
+      tube.material.color.copy(tube.userData.baseColor).lerp(new THREE.Color(0xd8f7ff), Math.min(1, fiberTouch * 0.52));
     } else {
       tube.material.opacity = tube.userData.baseOpacity * introBody;
     }
@@ -1215,8 +1438,8 @@ function animate() {
   jellyLight.position.copy(jelly.position);
   jellyLight.intensity = (14.0 + softPulse * 8.0 + bellTouchPulse * 4.5 + bellGlowWave * 15.0 + tentacleRubPulse * 1.5) * introBody;
   seaTouchLight.position.copy(jelly.position);
-  seaTouchLight.intensity = bellGlowWave * 14.0 * introBody;
-  seaTouchLight.distance = 90;
+  seaTouchLight.intensity = bellGlowWave * 11.5 * introBody;
+  seaTouchLight.distance = 100;
 
   scene.fog.color.copy(baseFogColor).lerp(touchFogColor, Math.min(1, bellGlowWave * 0.72));
   scene.fog.density = THREE.MathUtils.lerp(0.085, 0.074, Math.min(1, bellGlowWave * 0.65));
